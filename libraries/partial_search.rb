@@ -32,6 +32,8 @@ class Chef
 
     attr_accessor :rest
 
+    @@cache = {}
+
     def initialize(url=nil)
       @rest = ::Chef::REST.new(url || ::Chef::Config[:search_url])
     end
@@ -45,13 +47,11 @@ class Chef
       start = args.include?(:start) ? args[:start] : 0
       rows = args.include?(:rows) ? args[:rows] : 1000
       query_string = "search/#{type}?q=#{escape(query)}&sort=#{escape(sort)}&start=#{escape(start)}&rows=#{escape(rows)}"
-      if args[:keys]
-        response = @rest.post_rest(query_string, args[:keys])
-        response_rows = response['rows'].map { |row| row['data'] }
-      else
-        response = @rest.get_rest(query_string)
-        response_rows = response['rows']
-      end
+
+      response = query_result(query_string, args[:keys], args[:cache])
+
+      args[:keys] ? response_rows = response['rows'].map { |row| row['data'] } : response_rows = response['rows']
+
       if block
         response_rows.each { |o| block.call(o) unless o.nil?}
         unless (response["start"] + response_rows.length) >= response["total"]
@@ -62,7 +62,7 @@ class Chef
             :start => nstart,
             :rows => rows
           }
-          search(type, query, args_hash, &block)  
+          search(type, query, args_hash, &block)
         end
         true
       else
@@ -77,6 +77,33 @@ class Chef
     private
       def escape(s)
         s && URI.escape(s.to_s)
+      end
+
+      def query_result(query_string, keys, cache)
+        # Check the cache, if enabled
+        response = cache_fetch(query_string, keys) if cache
+   
+        # Otherwise get the result
+        response ||= if keys
+          @rest.post_rest(query_string, keys)
+        else
+          @rest.get_rest(query_string)
+        end
+
+        cache_store(query_string, keys, response) if cache
+
+        response
+      end
+
+      # Adds the result to the cache if it isn't already there
+      def cache_store(query_string, keys, val)
+        @@cache[query_string] ||= {}
+        @@cache[query_string][keys] ||= val
+      end
+
+      # Returns the result from the cache or nil on a cache miss
+      def cache_fetch(query_string, keys={})
+        @@cache[query_string] ? @@cache[query_string][keys] : nil
       end
   end
 end
